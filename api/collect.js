@@ -37,7 +37,7 @@ async function aiExtract(text) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'openai/gpt-5.5-mini',
+      model: 'openai/gpt-5.5',
       messages: [
         { role: 'system', content: 'Extract Korean cultural event data and return strict JSON only.' },
         { role: 'user', content: prompt }
