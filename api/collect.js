@@ -138,7 +138,7 @@ function assessQuality(event, source) {
   const reasons = [];
   const allowedTypes = ['팝업', '공연', '전시', '페스티벌', '뮤지컬', '연극', '클래식'];
 
-  if (event.title && event.title.length >= 2) score += 15; else reasons.push('title');
+  if (event.title && event.title.length >= 2) score += 10; else reasons.push('title');
   const validStart = /^\d{4}-\d{2}-\d{2}$/.test(String(event.start_date || ''));
   const validEnd = /^\d{4}-\d{2}-\d{2}$/.test(String(event.end_date || ''));
   if (validStart && validEnd && event.end_date >= event.start_date && isCurrentOrUpcoming(event)) score += 20;
