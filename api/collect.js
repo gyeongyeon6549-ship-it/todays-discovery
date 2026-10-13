@@ -133,6 +133,67 @@ function isCurrentOrUpcoming(event) {
   return end >= today;
 }
 
+function assessQuality(event, source) {
+  let score = 0;
+  const reasons = [];
+  const allowedTypes = ['팝업', '공연', '전시', '페스티벌', '뮤지컬', '연극', '클래식'];
+
+  if (event.title && event.title.length >= 2) score += 15; else reasons.push('title');
+  const validStart = /^\d{4}-\d{2}-\d{2}$/.test(String(event.start_date || ''));
+  const validEnd = /^\d{4}-\d{2}-\d{2}$/.test(String(event.end_date || ''));
+  if (validStart && validEnd && event.end_date >= event.start_date && isCurrentOrUpcoming(event)) score += 20;
+  else reasons.push('date');
+
+  if (source?.name && /^https:\/\//.test(source?.url || '')) score += 20; else reasons.push('source');
+  if (event.venue_name && event.venue_name.length >= 2) score += 10; else reasons.push('venue');
+
+  if (event.sido === '서울특별시') {
+    score += 5;
+    if (event.sigungu && /구$/.test(event.sigungu)) score += 5;
+  } else {
+    reasons.push('seoul');
+  }
+
+  if (allowedTypes.includes(event.event_type)) score += 10; else reasons.push('type');
+  if (event.summary && event.summary.length >= 10) score += 5; else reasons.push('summary');
+  if (Array.isArray(event.interests) && event.interests.length > 0) score += 5; else reasons.push('interests');
+  if (/^https:\/\//.test(event.source_url || '')) score += 10; else reasons.push('url');
+
+  return { score, reasons };
+}
+
+async function aiRecheck(source, text, events, oidc) {
+  if (!events.length) return [];
+  const prompt = `아래는 '${source.name}' 공식 페이지에서 1차 추출했지만 품질 점수가 중간 수준인 행사들이다.
+원문을 다시 대조하여 틀린 값만 수정하고, 원문에서 확인되지 않는 값은 null로 둔다.
+서울특별시에서 진행되는 현재/예정 행사만 남긴다. 추측하지 않는다.
+반드시 {"events":[...]} JSON만 반환한다.
+
+재검증 대상:
+${JSON.stringify(events)}
+
+공식 페이지 원문:
+${text.slice(0, 50000)}`;
+
+  const response = await fetch('https://ai-gateway.vercel.sh/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${oidc}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'openai/gpt-5-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'Recheck extracted Korean event records against official source text. Return strict JSON only and never invent facts.' },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`${source.name} recheck ${response.status}: ${raw.slice(0, 250)}`);
+  const envelope = JSON.parse(raw);
+  const parsed = JSON.parse(cleanJson(envelope?.choices?.[0]?.message?.content || '{}'));
+  return (Array.isArray(parsed.events) ? parsed.events : []).map(row => normalizeEvent(row, source)).filter(isCurrentOrUpcoming);
+}
+
 async function fetchSource(source) {
   const response = await fetch(source.url, {
     headers: {
@@ -244,11 +305,39 @@ async function enqueue(event) {
 async function collectOneSource(source, oidc) {
   try {
     const text = await fetchSource(source);
-    const events = await aiExtract(source, text, oidc);
-    return { source, events, error: null };
+    const extracted = await aiExtract(source, text, oidc);
+    const high = [], medium = [], low = [];
+
+    for (const event of extracted) {
+      const quality = assessQuality(event, source);
+      if (quality.score >= 80) high.push({ ...event, quality_score: quality.score });
+      else if (quality.score >= 60) medium.push(event);
+      else low.push({ title: event.title, score: quality.score, reasons: quality.reasons });
+    }
+
+    let rechecked = [];
+    if (medium.length) {
+      try {
+        const repaired = await aiRecheck(source, text, medium, oidc);
+        rechecked = repaired
+          .map(event => ({ event, quality: assessQuality(event, source) }))
+          .filter(x => x.quality.score >= 80 && x.event.sido === '서울특별시')
+          .map(x => ({ ...x.event, quality_score: x.quality.score }));
+      } catch (error) {
+        console.error(`[collector:${source.id}:recheck]`, error);
+      }
+    }
+
+    const events = [...high, ...rechecked].filter(event => event.sido === '서울특별시');
+    return {
+      source,
+      events,
+      stats: { extracted: extracted.length, approved: events.length, rechecked: medium.length, rejected: extracted.length - events.length, low: low.slice(0, 5) },
+      error: null
+    };
   } catch (error) {
     console.error(`[collector:${source.id}]`, error);
-    return { source, events: [], error: error.message };
+    return { source, events: [], stats: { extracted: 0, approved: 0, rechecked: 0, rejected: 0 }, error: error.message };
   }
 }
 
@@ -289,7 +378,10 @@ export default async function handler(req, res) {
 
     const perSource = results.map(result => ({
       source: result.source.name,
-      extracted: result.events.length,
+      extracted: result.stats?.extracted || 0,
+      approved: result.stats?.approved || 0,
+      rechecked: result.stats?.rechecked || 0,
+      rejected: result.stats?.rejected || 0,
       error: result.error
     }));
 
@@ -297,6 +389,7 @@ export default async function handler(req, res) {
       ok: results.some(result => !result.error),
       target: '30+ live events',
       sources: perSource,
+      qualityPolicy: 'rules >=80 auto-approve; 60-79 AI batch recheck; <60 reject; duplicate is a hard gate',
       extractedAfterDedup: merged.length,
       queued,
       insertErrors: insertErrors.slice(0, 10)
