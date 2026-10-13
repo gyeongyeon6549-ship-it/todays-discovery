@@ -50,6 +50,27 @@ function buildSources() {
       url: 'https://www.ehyundai.com/newPortal/NS/NS000001_V.do?bbsCd=201&seq=2093073',
       maxItems: 10,
       note: '팝업스토어와 브랜드 이벤트만 추출한다. 서울 소재 점포의 행사만 우선한다. 일반 상품 할인이나 단순 쇼핑 프로모션은 제외한다.'
+    },
+    {
+      id: 'mmca-seoul',
+      name: '국립현대미술관 서울',
+      url: 'https://www.mmca.go.kr/visitingInfo/seoulInfo.do',
+      maxItems: 12,
+      note: '국립현대미술관 서울관의 현재 진행 중 또는 예정 전시·다원예술만 추출한다. 과천·덕수궁·청주관 행사는 제외한다.'
+    },
+    {
+      id: 'lg-arts',
+      name: 'LG아트센터 서울',
+      url: 'https://www.lgart.com/',
+      maxItems: 12,
+      note: '서울 LG아트센터에서 진행 중이거나 예정된 공연만 추출한다. 티켓오픈 공지나 시설 안내는 제외한다.'
+    },
+    {
+      id: 'ntok',
+      name: '국립극장',
+      url: 'https://www.ntok.go.kr/ntok/pm/prfmng/searchPerfList.do?mi=21008',
+      maxItems: 14,
+      note: '국립극장 공연 중 진행 중이거나 예정된 실제 공연만 추출한다. 교육·모집·마켓은 제외한다.'
     }
   ];
 }
