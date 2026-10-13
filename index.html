@@ -3,7 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#F5F3FA">
+<meta name="theme-color" content="#6757D9">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="todi">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
 <title>todi — Today's Discovery</title>
 <style>
 :root{--bg:#F5F3FA;--surface:#fff;--surface2:#ECE8F6;--text:#222126;--muted:#77727F;--primary:#6757D9;--accent:#C7FF4A;--line:#DED9EC;--chip:#E8E3FB;--navh:78px;--shadow:0 12px 30px rgba(45,34,85,.10)}
@@ -26,7 +32,7 @@ nav{position:fixed;left:50%;bottom:0;transform:translateX(-50%);z-index:30;width
 </section>
 <section id="home" class="screen">
   <div class="top"><div class="toprow"><div><div class="brand">todi</div><div class="sub" id="homeSubtitle">실제 행사 정보를 불러오는 중</div></div><button class="iconbtn" onclick="toggleTheme()" id="themeBtn">☾</button></div></div>
-  <div class="statuscard"><div><b><span class="statusdot"></span>공식 데이터 피드</b><div class="sub" id="pipelineText">실시간 공식 출처 + DB 데이터 통합</div></div><button class="iconbtn" onclick="loadEvents(true)">↻</button></div>
+  <div class="statuscard"><div><b><span class="statusdot"></span>최신 행사 업데이트</b><div class="sub" id="pipelineText">새로운 행사를 자동으로 확인하고 있어요</div></div><button class="iconbtn" aria-label="새로고침" onclick="loadEvents(true)">↻</button></div>
   <div class="section" id="hero"></div>
   <div class="section"><div class="section-head"><div><div class="eyebrow">FOR YOU</div><h2>취향 추천</h2></div><div class="sub" id="recommendCount"></div></div><div class="scroll" id="recommendCards"></div></div>
   <div class="section"><div class="eyebrow">NEW</div><h2>새로 발견했어요</h2><div class="scroll" id="newCards"></div></div>
@@ -75,7 +81,13 @@ function init(){
   restoreSession();
 }
 function saveOnboarding(){const interests=[...document.querySelectorAll('#interestChoices .sel')].map(x=>x.dataset.interest);const preferredGus=[...document.querySelectorAll('#preferredGuChoices .sel')].map(x=>x.dataset.gu);prefs={interests,region:'서울특별시',preferredGus};localStorage.setItem('td_prefs',JSON.stringify(prefs));scheduleProfileSync();showMain();loadEvents()}
-function resetPrefs(){localStorage.removeItem('td_prefs');location.reload()}
+function resetPrefs(){
+  document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
+  document.getElementById('onboarding').classList.add('active');
+  document.getElementById('nav').style.display='none';
+  document.getElementById('interestChoices').innerHTML=INTERESTS.map(x=>`<button class="choice ${prefs?.interests?.includes(x)?'sel':''}" data-interest="${x}" onclick="this.classList.toggle('sel')">${x}</button>`).join('');
+  document.getElementById('preferredGuChoices').innerHTML=GUS.map(g=>`<button class="choice ${prefs?.preferredGus?.includes(g)?'sel':''}" data-gu="${g}" onclick="this.classList.toggle('sel')">${g}</button>`).join('');
+}
 
 function authHeaders(){
   return {apikey:SUPABASE_KEY,Authorization:`Bearer ${session?.access_token||''}`,'Content-Type':'application/json'};
@@ -203,7 +215,7 @@ async function loadEvents(force=false){
   renderAll();
   const sourceCount=new Set(events.map(sourceName)).size;
   subtitle.textContent=events.length?`실제 행사 ${events.length}개 · 공식 출처 ${sourceCount}곳`:'실제 데이터를 불러오지 못했어요';
-  document.getElementById('pipelineText').textContent=mode==='DB'?`Supabase 중심 · ${usableDb.length}건`:`Supabase ${usableDb.length}건 · Live Feed 백업 ${live.length}건`;
+  document.getElementById('pipelineText').textContent=mode==='DB'?'오늘의 최신 행사까지 반영했어요':'새로운 행사 정보를 확인해 반영했어요';
 }
 function renderAll(){
   const live=events.filter(e=>status(e)!=='ended');const ranked=diverseRank(live,Math.max(10,live.length));const hero=ranked[0]||events[0];
@@ -223,6 +235,7 @@ function openDetail(id){const e=events.find(x=>x.id===id);if(!e)return;trackBeha
 function closeDetail(){document.getElementById('detailModal').classList.remove('open')}
 function go(id,b){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');if(id==='favorites')renderFavs();if(id==='settings'){document.getElementById('settingInterests').textContent=(prefs?.interests||[]).join(' · ')||'설정 없음';document.getElementById('settingRegion').textContent='서울특별시';document.getElementById('settingGus').textContent=(prefs?.preferredGus||[]).length?'선호 지역구 · '+prefs.preferredGus.join(' · '):'선호 지역구 · 서울 전체'}window.scrollTo({top:0,behavior:'instant'})}
 init();
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}))}
 </script>
 </body>
 </html>
