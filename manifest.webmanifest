@@ -1,0 +1,19 @@
+{
+  "name": "todi — Today's Discovery",
+  "short_name": "todi",
+  "description": "서울의 전시, 공연, 팝업을 취향과 지역에 맞춰 발견하는 개인 문화생활 앱",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F5F3FA",
+  "theme_color": "#6757D9",
+  "lang": "ko-KR",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
