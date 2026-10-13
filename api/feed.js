@@ -78,6 +78,27 @@ function classify(title = '', venue = '', extra = '') {
   return '공연';
 }
 
+function inferSeoulGu(venue = '') {
+  const text = String(venue);
+  const rules = [
+    [/예술의전당|서초/, '서초구'],
+    [/세종문화회관|광화문/, '종로구'],
+    [/더현대\s*서울/, '영등포구'],
+    [/무역센터/, '강남구'],
+    [/미아/, '성북구'],
+    [/목동/, '양천구'],
+    [/신촌/, '서대문구'],
+    [/디큐브/, '구로구'],
+    [/천호/, '강동구']
+  ];
+  const found = rules.find(([re]) => re.test(text));
+  return found ? found[1] : null;
+}
+
+function isOutsideSeoulVenue(venue = '') {
+  return /판교|중동|킨텍스|고양|일산|부천|성남/.test(String(venue));
+}
+
 function interestsFor(type, title = '') {
   const tags = [];
   const text = String(title);
@@ -106,7 +127,7 @@ function makeEvent({ title, start, end, venue, sourceName, sourceUrl, extra = ''
     end_date: end || start,
     venue_name: venue || sourceName,
     sido: '서울특별시',
-    sigungu,
+    sigungu: sigungu || inferSeoulGu(venue),
     address_detail: null,
     opening_hours: null,
     price_text: null,
@@ -126,7 +147,7 @@ function validLive(event) {
   const today = todayIso();
   const horizon = plusDaysIso(100);
   const end = event.end_date || event.start_date;
-  return end >= today && event.start_date <= horizon && !/교육|아카데미|워크숍|강좌|모집/.test(event.title);
+  return end >= today && event.start_date <= horizon && !isOutsideSeoulVenue(event.venue_name) && !/교육|아카데미|워크숍|강좌|모집/.test(event.title);
 }
 
 async function fetchHtml(url) {
