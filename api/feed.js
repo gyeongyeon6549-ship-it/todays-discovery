@@ -14,6 +14,22 @@ const SOURCES = {
   hyundaiFallback: {
     name: '현대백화점 팝업 다이어리',
     url: 'https://www.ehyundai.com/newPortal/NS/NS000001_V.do?bbsCd=201&seq=2093073'
+  },
+  sema: {
+    name: '서울시립미술관 SeMA',
+    url: 'https://sema.seoul.go.kr/kr/whatson/landing?whatChoice2=N&whatChoice3=N&whatChoice4=N&whatChoice5=N&whatsonMenuDivList=EX&whenType=ALL_DAY'
+  },
+  mmca: {
+    name: '국립현대미술관 서울',
+    url: 'https://www.mmca.go.kr/visitingInfo/seoulInfo.do'
+  },
+  lg: {
+    name: 'LG아트센터 서울',
+    url: 'https://www.lgart.com/'
+  },
+  ntok: {
+    name: '국립극장',
+    url: 'https://www.ntok.go.kr/ntok/pm/prfmng/searchPerfList.do?mi=21008'
   }
 };
 
@@ -89,14 +105,23 @@ function inferSeoulGu(venue = '') {
     [/목동/, '양천구'],
     [/신촌/, '서대문구'],
     [/디큐브/, '구로구'],
-    [/천호/, '강동구']
+    [/천호/, '강동구'],
+    [/LG\s*아트센터|LG SIGNATURE|U\+\s*스테이지/, '강서구'],
+    [/국립극장|해오름극장|달오름극장|하늘극장/, '중구'],
+    [/국립현대미술관\s*서울/, '종로구'],
+    [/서소문본관/, '중구'],
+    [/북서울미술관|노원아트뮤지엄/, '노원구'],
+    [/남서울미술관/, '관악구'],
+    [/서서울미술관/, '금천구'],
+    [/사진미술관/, '도봉구'],
+    [/미술아카이브/, '종로구']
   ];
   const found = rules.find(([re]) => re.test(text));
   return found ? found[1] : null;
 }
 
 function isOutsideSeoulVenue(venue = '') {
-  return /판교|중동|킨텍스|고양|일산|부천|성남/.test(String(venue));
+  return /판교|중동|킨텍스|고양|일산|부천|성남|주캐나다|주워싱턴|한국문화원/.test(String(venue));
 }
 
 function interestsFor(type, title = '') {
@@ -247,6 +272,138 @@ function parseGenericCards(html, sourceName, sourceUrl, defaultVenue) {
   return events;
 }
 
+
+function textBlocks(html) {
+  const out = [];
+  for (const tag of ['li', 'article']) {
+    const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
+    let m;
+    while ((m = re.exec(html))) {
+      const text = cleanHtml(m[1]);
+      if (text.length >= 15 && text.length <= 1600) out.push(text);
+    }
+  }
+  out.push(cleanHtml(html));
+  return out;
+}
+
+function tidyTitle(value = '') {
+  let text = String(value)
+    .replace(/^(?:Image|이미지)\s*/i, '')
+    .replace(/(?:자세히\s*보기|상세보기)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const markers = ['Image ', '이미지 ', '자세히 보기 ', '상세보기 '];
+  for (const marker of markers) {
+    const i = text.lastIndexOf(marker);
+    if (i >= 0) text = text.slice(i + marker.length).trim();
+  }
+  if (text.length > 120) text = text.slice(-120).trim();
+  return text;
+}
+
+function parseSema(html) {
+  const events = [];
+  const re = /(.{2,120}?)\s+전시\s+([^,]{2,80}),?\s*(20\d{2})[./-](\d{2})[./-](\d{2})\s*~\s*(20\d{2})[./-](\d{2})[./-](\d{2})/g;
+  for (const block of textBlocks(html)) {
+    let m;
+    while ((m = re.exec(block))) {
+      const title = tidyTitle(m[1]);
+      const venue = cleanHtml(m[2]);
+      if (!title || /교육|프로그램|해설|워크숍/.test(title)) continue;
+      const event = makeEvent({
+        title,
+        start: iso(m[3], m[4], m[5]),
+        end: iso(m[6], m[7], m[8]),
+        venue,
+        sourceName: SOURCES.sema.name,
+        sourceUrl: SOURCES.sema.url,
+        eventType: '전시'
+      });
+      if (validLive(event)) events.push(event);
+    }
+  }
+  return dedupe(events);
+}
+
+function parseMmca(html) {
+  const events = [];
+  const re = /(?:전시|다원예술)\s+(.{2,120}?)\s+(20\d{2})[./-](\d{2})[./-](\d{2})\s*~\s*(20\d{2})[./-](\d{2})[./-](\d{2})/g;
+  for (const block of textBlocks(html)) {
+    let m;
+    while ((m = re.exec(block))) {
+      const title = tidyTitle(m[1]);
+      if (!title || /교육|아카데미|워크숍/.test(title)) continue;
+      const event = makeEvent({
+        title,
+        start: iso(m[2], m[3], m[4]),
+        end: iso(m[5], m[6], m[7]),
+        venue: '국립현대미술관 서울',
+        sourceName: SOURCES.mmca.name,
+        sourceUrl: SOURCES.mmca.url,
+        eventType: '전시',
+        sigungu: '종로구'
+      });
+      if (validLive(event)) events.push(event);
+    }
+  }
+  return dedupe(events);
+}
+
+function parseLg(html) {
+  const events = [];
+  const re = /(.{2,120}?)\s+(20\d{2})\.(\d{2})\.(\d{2})\s*~\s*(?:(20\d{2})\.)?(\d{2})\.(\d{2})\s+(LG SIGNATURE\s*홀|U\+\s*스테이지)/g;
+  for (const block of textBlocks(html)) {
+    let m;
+    while ((m = re.exec(block))) {
+      const title = tidyTitle(m[1]);
+      if (!title || /Notice|티켓오픈|운영 시간/.test(title)) continue;
+      const sy = Number(m[2]), sm = Number(m[3]), sd = Number(m[4]);
+      let ey = m[5] ? Number(m[5]) : sy;
+      const em = Number(m[6]), ed = Number(m[7]);
+      if (!m[5] && em < sm) ey += 1;
+      const venue = `LG아트센터 서울 ${m[8].replace(/\s+/g, ' ').trim()}`;
+      const event = makeEvent({
+        title,
+        start: iso(sy, sm, sd),
+        end: iso(ey, em, ed),
+        venue,
+        sourceName: SOURCES.lg.name,
+        sourceUrl: SOURCES.lg.url,
+        sigungu: '강서구'
+      });
+      if (validLive(event)) events.push(event);
+    }
+  }
+  return dedupe(events);
+}
+
+function parseNtok(html) {
+  const events = [];
+  const re = /(.{2,140}?)\s+기간\s+(20\d{2})-(\d{2})-(\d{2})\s*~\s*(20\d{2})-(\d{2})-(\d{2})\s+장소\s+(.{2,60}?)\s+장르\s+(.{1,50}?)(?=\s+시간|\s+티켓가격|\s+상세보기|$)/g;
+  for (const block of textBlocks(html)) {
+    let m;
+    while ((m = re.exec(block))) {
+      const title = tidyTitle(m[1]);
+      const venue = cleanHtml(m[8]);
+      const genre = cleanHtml(m[9]);
+      if (!title || /마켓|시장|교육|아카데미|모집/.test(title)) continue;
+      const event = makeEvent({
+        title,
+        start: iso(m[2], m[3], m[4]),
+        end: iso(m[5], m[6], m[7]),
+        venue: `국립극장 ${venue}`,
+        sourceName: SOURCES.ntok.name,
+        sourceUrl: SOURCES.ntok.url,
+        extra: genre,
+        sigungu: '중구'
+      });
+      if (validLive(event)) events.push(event);
+    }
+  }
+  return dedupe(events);
+}
+
 function discoverPopupUrl(html) {
   const linkRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
   const candidates = [];
@@ -338,10 +495,14 @@ export default async function handler(req, res) {
   const errors = [];
   let events = [];
 
-  const [sacResult, sejongResult, popupListResult] = await Promise.allSettled([
+  const [sacResult, sejongResult, popupListResult, semaResult, mmcaResult, lgResult, ntokResult] = await Promise.allSettled([
     fetchHtml(SOURCES.sac.url),
     fetchHtml(SOURCES.sejong.url),
-    fetchHtml(SOURCES.hyundaiList.url)
+    fetchHtml(SOURCES.hyundaiList.url),
+    fetchHtml(SOURCES.sema.url),
+    fetchHtml(SOURCES.mmca.url),
+    fetchHtml(SOURCES.lg.url),
+    fetchHtml(SOURCES.ntok.url)
   ]);
 
   if (sacResult.status === 'fulfilled') {
@@ -354,6 +515,30 @@ export default async function handler(req, res) {
     events.push(...parseGenericCards(sejongResult.value, SOURCES.sejong.name, SOURCES.sejong.url, '세종문화회관'));
   } else {
     errors.push(`세종문화회관: ${sejongResult.reason?.message || 'fetch failed'}`);
+  }
+
+  if (semaResult.status === 'fulfilled') {
+    events.push(...parseSema(semaResult.value));
+  } else {
+    errors.push(`서울시립미술관: ${semaResult.reason?.message || 'fetch failed'}`);
+  }
+
+  if (mmcaResult.status === 'fulfilled') {
+    events.push(...parseMmca(mmcaResult.value));
+  } else {
+    errors.push(`국립현대미술관: ${mmcaResult.reason?.message || 'fetch failed'}`);
+  }
+
+  if (lgResult.status === 'fulfilled') {
+    events.push(...parseLg(lgResult.value));
+  } else {
+    errors.push(`LG아트센터: ${lgResult.reason?.message || 'fetch failed'}`);
+  }
+
+  if (ntokResult.status === 'fulfilled') {
+    events.push(...parseNtok(ntokResult.value));
+  } else {
+    errors.push(`국립극장: ${ntokResult.reason?.message || 'fetch failed'}`);
   }
 
   let popupUrl = SOURCES.hyundaiFallback.url;
