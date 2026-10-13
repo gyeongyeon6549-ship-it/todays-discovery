@@ -61,6 +61,7 @@ const TYPES=['전체','팝업','공연','전시','페스티벌','뮤지컬','연
 const GUS=['강남구','강동구','강북구','강서구','관악구','광진구','구로구','금천구','노원구','도봉구','동대문구','동작구','마포구','서대문구','서초구','성동구','성북구','송파구','양천구','영등포구','용산구','은평구','종로구','중구','중랑구'];
 let events=[],activeType='전체',activeGu='전체',favState='ongoing';
 let favorites=JSON.parse(localStorage.getItem('td_favorites')||'[]');
+let behavior=JSON.parse(localStorage.getItem('td_behavior')||'{"types":{},"gus":{},"tags":{}}');
 let prefs=JSON.parse(localStorage.getItem('td_prefs')||'null');
 
 function init(){
@@ -89,27 +90,50 @@ function eventKey(e){return`${String(e.title||'').trim().toLowerCase()}|${e.star
 function dedupe(rows){const seen=new Set();return rows.filter(e=>{if(!e?.title||SAMPLE_TITLES.has(e.title))return false;const k=eventKey(e);if(seen.has(k))return false;seen.add(k);return true})}
 function card(e){return`<article class="card" onclick="openDetail(${e.id})"><div class="visual">${visual(e)}<span class="badge">${sourceBadge(e)}</span></div><div class="cardbody"><button class="heart" onclick="event.stopPropagation();toggleFav(${e.id});renderAll()">${favorites.includes(e.id)?'♥':'♡'}</button><div class="title">${e.title}</div><div class="meta">${period(e)}<br>${e.venue_name||region(e)}</div><div class="chips">${tags(e).slice(0,3).map(t=>`<span class="chip">#${t}</span>`).join('')}</div></div></article>`}
 function item(e){return`<article class="item" onclick="openDetail(${e.id})"><div class="itemvisual">${visual(e)}</div><div><div class="eyebrow">${sourceName(e)}</div><div class="title">${e.title}</div><div class="meta">${period(e)} · ${e.venue_name||region(e)}</div><div class="chips">${tags(e).slice(0,2).map(t=>`<span class="chip">#${t}</span>`).join('')}</div></div></article>`}
-function score(e){let s=0;const p=prefs?.interests||[];tags(e).forEach(t=>{if(p.includes(t))s+=3});if(prefs?.region&&e.sido===prefs.region)s+=2;if(status(e)==='ongoing')s+=1;if(e.event_type==='팝업')s+=.5;return s}
+function daysFromToday(date){if(!date)return 999;const a=new Date();a.setHours(0,0,0,0);const b=new Date(date+'T00:00:00');return Math.round((b-a)/86400000)}
+function maxBehavior(obj){return Math.max(1,...Object.values(obj||{}).map(Number))}
+function trackBehavior(e,weight=1){if(!e)return;behavior.types[e.event_type]=(behavior.types[e.event_type]||0)+weight;if(e.sigungu)behavior.gus[e.sigungu]=(behavior.gus[e.sigungu]||0)+weight;tags(e).forEach(t=>behavior.tags[t]=(behavior.tags[t]||0)+weight);localStorage.setItem('td_behavior',JSON.stringify(behavior))}
+function score(e){
+  let s=0;
+  const p=prefs?.interests||[];
+  const matches=tags(e).filter(t=>p.includes(t)).length;
+  if(matches)s+=Math.min(40,25+matches*7.5);
+  const preferred=prefs?.preferredGus||[];
+  if(preferred.length&&e.sigungu&&preferred.includes(e.sigungu))s+=20;
+  const st=status(e),d=daysFromToday(e.start_date);
+  if(st==='ongoing')s+=15;else if(d<=14)s+=12;else if(d<=30)s+=8;else s+=4;
+  if(e.created_at){const age=(Date.now()-new Date(e.created_at).getTime())/86400000;s+=age<=3?10:age<=7?7:age<=14?4:2}else{s+=5}
+  const ta=(behavior.types[e.event_type]||0)/maxBehavior(behavior.types);
+  const ga=e.sigungu?(behavior.gus[e.sigungu]||0)/maxBehavior(behavior.gus):0;
+  const taga=tags(e).length?Math.max(...tags(e).map(t=>(behavior.tags[t]||0)/maxBehavior(behavior.tags))):0;
+  s+=15*Math.min(1,.45*ta+.25*ga+.30*taga);
+  return s;
+}
+function diverseRank(xs,limit=10){const pool=[...xs],out=[],typeCount={},guCount={};while(pool.length&&out.length<limit){pool.sort((a,b)=>(score(b)-(typeCount[b.event_type]||0)*5-(guCount[b.sigungu]||0)*1.5)-(score(a)-(typeCount[a.event_type]||0)*5-(guCount[a.sigungu]||0)*1.5));const pick=pool.shift();out.push(pick);typeCount[pick.event_type]=(typeCount[pick.event_type]||0)+1;if(pick.sigungu)guCount[pick.sigungu]=(guCount[pick.sigungu]||0)+1}return out}
 
 async function loadLiveFeed(){const r=await fetch(`/api/feed?t=${Date.now()}`,{cache:'no-store'});if(!r.ok)throw new Error('live feed '+r.status);const data=await r.json();if(!Array.isArray(data.events))throw new Error('invalid live feed');return data}
 async function loadSupabase(){const r=await fetch(`${SUPABASE_URL}/rest/v1/events?status=eq.approved&select=*&order=created_at.desc`,{headers:{apikey:SUPABASE_KEY},cache:'no-store'});if(!r.ok)throw new Error('supabase '+r.status);return await r.json()}
 async function loadEvents(force=false){
-  const subtitle=document.getElementById('homeSubtitle');if(force)subtitle.textContent='최신 공식 데이터를 갱신하는 중…';
-  const [feedResult,dbResult]=await Promise.allSettled([loadLiveFeed(),loadSupabase()]);
-  const live=feedResult.status==='fulfilled'?feedResult.value.events:[];
-  const db=dbResult.status==='fulfilled'?dbResult.value:[];
-  events=dedupe([...live,...db]).filter(e=>status(e)!=='ended');
+  const subtitle=document.getElementById('homeSubtitle');if(force)subtitle.textContent='최신 데이터를 확인하는 중…';
+  let db=[],live=[],mode='DB';
+  try{db=await loadSupabase()}catch(e){}
+  const usableDb=db.filter(e=>!SAMPLE_TITLES.has(e.title)&&status(e)!=='ended'&&(!e.sido||e.sido==='서울특별시'));
+  if(usableDb.length<20){
+    mode='백업 피드';
+    try{const feed=await loadLiveFeed();live=feed.events||[]}catch(e){}
+  }
+  events=dedupe(mode==='DB'?usableDb:[...usableDb,...live]).filter(e=>status(e)!=='ended'&&(!e.sido||e.sido==='서울특별시'));
   events.sort((a,b)=>(a.start_date||'9999').localeCompare(b.start_date||'9999'));
   renderAll();
   const sourceCount=new Set(events.map(sourceName)).size;
   subtitle.textContent=events.length?`실제 행사 ${events.length}개 · 공식 출처 ${sourceCount}곳`:'실제 데이터를 불러오지 못했어요';
-  document.getElementById('pipelineText').textContent=feedResult.status==='fulfilled'?`실시간 공식 피드 ${live.length}건 + DB ${db.length}건`:`실시간 피드 연결 실패 · DB ${db.length}건`;
-  if(!events.length){document.getElementById('dataStatus').textContent=`실시간 피드: ${feedResult.status==='fulfilled'?'0건':'연결 실패'} · DB: ${db.length}건`}
+  document.getElementById('pipelineText').textContent=mode==='DB'?`Supabase 중심 · ${usableDb.length}건`:`Supabase ${usableDb.length}건 · Live Feed 백업 ${live.length}건`;
+  if(!events.length)document.getElementById('dataStatus').textContent='실제 데이터 연결 상태 확인 필요';
 }
 function renderAll(){
-  const live=events.filter(e=>status(e)!=='ended');const ranked=[...live].sort((a,b)=>score(b)-score(a));const hero=ranked[0]||events[0];
+  const live=events.filter(e=>status(e)!=='ended');const ranked=diverseRank(live,Math.max(10,live.length));const hero=ranked[0]||events[0];
   document.getElementById('hero').innerHTML=hero?`<div class="hero" onclick="openDetail(${hero.id})"><span class="hero-badge">TODAY'S PICK · ${sourceName(hero)}</span><div><div class="eyebrow" style="color:#fff">${hero.event_type||'문화행사'}</div><h1>${hero.title}</h1><p>${period(hero)}<br>${hero.venue_name||region(hero)}</p></div></div>`:`<div class="empty"><b>현재 표시할 행사가 없습니다.</b><br>새로고침 후에도 동일하면 공식 피드 연결 상태를 확인합니다.</div>`;
-  const rec=ranked.slice(0,10);document.getElementById('recommendCount').textContent=rec.length?`${rec.length}개 추천`:'';document.getElementById('recommendCards').innerHTML=rec.length?rec.map(card).join(''):'<div class="empty">추천 데이터를 불러오는 중이에요.</div>';
+  const rec=diverseRank(live,10);document.getElementById('recommendCount').textContent=rec.length?`${rec.length}개 추천`:'';document.getElementById('recommendCards').innerHTML=rec.length?rec.map(card).join(''):'<div class="empty">추천 데이터를 불러오는 중이에요.</div>';
   const newest=[...events].sort((a,b)=>String(b.created_at||b.start_date).localeCompare(String(a.created_at||a.start_date))).slice(0,10);document.getElementById('newCards').innerHTML=newest.length?newest.map(card).join(''):'<div class="empty">새로운 행사가 아직 없어요.</div>';
   const ending=events.filter(e=>status(e)==='ongoing').sort((a,b)=>(a.end_date||'9999').localeCompare(b.end_date||'9999')).slice(0,8);document.getElementById('endingCards').innerHTML=ending.length?ending.map(card).join(''):'<div class="empty">현재 종료 임박 행사가 없어요.</div>';
   const counts={};events.forEach(e=>{const s=sourceName(e);counts[s]=(counts[s]||0)+1});document.getElementById('dataStatus').textContent=events.length?`총 ${events.length}건 · ${Object.entries(counts).map(([k,v])=>`${k} ${v}건`).join(' · ')}`:'실제 데이터 대기 중';renderSearch();renderFavs();
@@ -117,10 +141,10 @@ function renderAll(){
 function setType(t,b){activeType=t;document.querySelectorAll('#typeFilters button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderSearch()}
 function setGu(g){activeGu=g;renderSearch()}
 function renderSearch(){const q=(document.getElementById('q')?.value||'').trim().toLowerCase();const xs=events.filter(e=>{const hay=[e.title,e.organizer_name,e.summary,e.event_type,e.venue_name,e.sido,e.sigungu,sourceName(e),...tags(e)].filter(Boolean).join(' ').toLowerCase();return(!q||hay.includes(q))&&(activeType==='전체'||String(e.event_type||'').includes(activeType))&&(activeGu==='전체'||e.sigungu===activeGu)});document.getElementById('searchList').innerHTML=xs.length?xs.map(item).join(''):'<div class="empty">조건에 맞는 행사가 없어요.</div>'}
-function toggleFav(id){favorites=favorites.includes(id)?favorites.filter(x=>x!==id):[...favorites,id];localStorage.setItem('td_favorites',JSON.stringify(favorites))}
+function toggleFav(id){const adding=!favorites.includes(id);favorites=adding?[...favorites,id]:favorites.filter(x=>x!==id);if(adding)trackBehavior(events.find(x=>x.id===id),2);localStorage.setItem('td_favorites',JSON.stringify(favorites))}
 function favTab(b,st){favState=st;document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');renderFavs()}
 function renderFavs(){const xs=events.filter(e=>favorites.includes(e.id)&&status(e)===favState);document.getElementById('favList').innerHTML=xs.length?xs.map(item).join(''):'<div class="empty">이 상태에 저장한 행사가 없어요.</div>'}
-function openDetail(id){const e=events.find(x=>x.id===id);if(!e)return;document.getElementById('detailVisual').innerHTML=visual(e);document.getElementById('detailSource').textContent=sourceName(e);document.getElementById('detailTitle').textContent=e.title;document.getElementById('detailMeta').innerHTML=`${period(e)}<br>${e.venue_name||region(e)}${e.opening_hours?`<br>${e.opening_hours}`:''}${e.price_text?`<br>${e.price_text}`:''}`;document.getElementById('detailTags').innerHTML=tags(e).map(t=>`<span class="chip">#${t}</span>`).join('');document.getElementById('detailSummary').textContent=e.summary||'공식 출처에서 확인된 행사입니다. 자세한 내용은 공식 페이지에서 확인해주세요.';const f=document.getElementById('detailFav');f.textContent=favorites.includes(id)?'♥ 관심 해제':'♡ 관심 저장';f.onclick=()=>{toggleFav(id);openDetail(id);renderAll()};const a=document.getElementById('detailOfficial');a.style.display=e.official_url?'block':'none';a.href=e.official_url||'#';document.getElementById('detailModal').classList.add('open')}
+function openDetail(id){const e=events.find(x=>x.id===id);if(!e)return;trackBehavior(e,1);document.getElementById('detailVisual').innerHTML=visual(e);document.getElementById('detailSource').textContent=sourceName(e);document.getElementById('detailTitle').textContent=e.title;document.getElementById('detailMeta').innerHTML=`${period(e)}<br>${e.venue_name||region(e)}${e.opening_hours?`<br>${e.opening_hours}`:''}${e.price_text?`<br>${e.price_text}`:''}`;document.getElementById('detailTags').innerHTML=tags(e).map(t=>`<span class="chip">#${t}</span>`).join('');document.getElementById('detailSummary').textContent=e.summary||'공식 출처에서 확인된 행사입니다. 자세한 내용은 공식 페이지에서 확인해주세요.';const f=document.getElementById('detailFav');f.textContent=favorites.includes(id)?'♥ 관심 해제':'♡ 관심 저장';f.onclick=()=>{toggleFav(id);openDetail(id);renderAll()};const a=document.getElementById('detailOfficial');a.style.display=e.official_url?'block':'none';a.href=e.official_url||'#';document.getElementById('detailModal').classList.add('open')}
 function closeDetail(){document.getElementById('detailModal').classList.remove('open')}
 function go(id,b){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');if(id==='favorites')renderFavs();if(id==='settings'){document.getElementById('settingInterests').textContent=(prefs?.interests||[]).join(' · ')||'설정 없음';document.getElementById('settingRegion').textContent='서울특별시';document.getElementById('settingGus').textContent=(prefs?.preferredGus||[]).length?'선호 지역구 · '+prefs.preferredGus.join(' · '):'선호 지역구 · 서울 전체'}window.scrollTo({top:0,behavior:'instant'})}
 init();
